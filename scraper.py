@@ -26,8 +26,97 @@ if not API_KEY:
 BASE_URL = "https://openrouter.ai/api/v1"
 client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
 
-# === ЛУЧШАЯ БЕСПЛАТНАЯ МОДЕЛЬ С ПОИСКОМ ===
-F1_MODEL = "qwen/qwen3.6-plus-preview:free"
+# === СПИСОК МОДЕЛЕЙ ДЛЯ ПЕРЕКЛЮЧЕНИЯ ===
+AVAILABLE_MODELS = [
+    "openrouter/free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "qwen/qwen3.6-plus-preview:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemini-2.0-flash-lite-preview-02-05:free",
+    "deepseek/deepseek-v4-flash:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "openai/gpt-oss-120b:free"
+]
+
+# === КЭШ РАБОТОСПОСОБНЫХ МОДЕЛЕЙ ===
+working_models = []
+model_check_time = None
+
+# === ФУНКЦИЯ ПРОВЕРКИ МОДЕЛЕЙ ===
+async def check_models_health():
+    """Проверяет все модели и возвращает список работающих"""
+    global working_models, model_check_time
+    
+    working = []
+    print("🔍 Проверка доступности моделей...")
+    
+    for model in AVAILABLE_MODELS:
+        try:
+            # Делаем тестовый запрос к модели
+            test_response = await client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "test"}],
+                max_tokens=5,
+                temperature=0.1
+            )
+            if test_response and test_response.choices:
+                working.append(model)
+                print(f"✅ {model} - ДОСТУПНА")
+            else:
+                print(f"❌ {model} - НЕ ДОСТУПНА")
+        except Exception as e:
+            print(f"❌ {model} - ОШИБКА: {str(e)[:50]}")
+    
+    working_models = working
+    model_check_time = datetime.now()
+    
+    # Отправляем результат админу (если бот уже запущен)
+    try:
+        from main import bot, ADMIN_IDS
+        if bot and ADMIN_IDS:
+            status = "📋 **Статус моделей ИИ:**\n\n"
+            for m in AVAILABLE_MODELS:
+                icon = "✅" if m in working_models else "❌"
+                name = m.split(':')[0].split('/')[-1][:25]
+                status += f"{icon} `{name}`\n"
+            status += f"\n📊 Всего доступно: {len(working_models)}/{len(AVAILABLE_MODELS)}"
+            for admin_id in ADMIN_IDS:
+                try:
+                    await bot.send_message(admin_id, status, parse_mode="HTML")
+                except:
+                    pass
+    except:
+        pass
+    
+    return working
+
+# === АВТОВЫБОР РАБОЧЕЙ МОДЕЛИ ===
+async def get_working_model():
+    """Возвращает первую рабочую модель из списка"""
+    global working_models, model_check_time
+    
+    # Если кэш старше 5 минут или пуст — обновляем
+    if not working_models or not model_check_time or (datetime.now() - model_check_time).seconds > 300:
+        await check_models_health()
+    
+    if not working_models:
+        return "openrouter/free"  # Фолбэк
+    
+    return working_models[0]
+
+# === ПРОВЕРКА КОНКРЕТНОЙ МОДЕЛИ ===
+async def is_model_working(model_name: str) -> bool:
+    """Проверяет, работает ли конкретная модель"""
+    try:
+        test_response = await client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=3,
+            temperature=0.1
+        )
+        return bool(test_response and test_response.choices)
+    except:
+        return False
 
 # === RSS ИСТОЧНИКИ ===
 RSS_SOURCES = [
@@ -42,71 +131,57 @@ RSS_SOURCES = [
     "https://www.the-race.com/feed/"
 ]
 
-# === ПРОМПТ ДЛЯ ГЕНЕРАЦИИ ПОСТОВ ===
-SYSTEM_PROMPT = """Ты — Нико, опытный гоночный инженер и журналист.
+# === ПРОМПТЫ ===
+SYSTEM_PROMPT = """Ты — Нико, гоночный инженер.
 
-ВАЖНО: СЕЙЧАС 2026 ГОД! Используй ТОЛЬКО актуальные данные из контекста или поиска.
-
-СТИЛЬ: живой, дерзкий, экспертный. Называй вещи своими именами.
+СТИЛЬ: живой, дерзкий, экспертный.
 
 ПРАВИЛА:
-- Пиши на русском, имена пилотов и команды на английском
-- Используй технический сленг
-- Разбивай текст на абзацы
-- В конце поста ставь эмодзи 🏁
-- НЕ ДОБАВЛЯЙ ссылки на канал
+- Пиши на русском, имена пилотов на английском
+- В конце поста эмодзи 🏁
+- НЕ ДОБАВЛЯЙ ссылки
 
 ВЫХОДНЫЕ ДАННЫЕ — список JSON:
-[{"text": "текст поста", "photo_search": "запрос для поиска фото"}]
-
-Заголовок — в <b>Жирным</b>, цитату — в <i>курсиве</i>.
+[{"text": "текст поста", "photo_search": "запрос для фото"}]
 """
 
-# === ПРОМПТ ДЛЯ ЧАТ-БОТА ===
-CHAT_SYSTEM_PROMPT = """Ты — Нико, гоночный инженер. Ты — мужик с яйцами.
-
-ТВОЙ ХАРАКТЕР:
-- Ты уважаешь себя и не даёшь себя унижать
-- Если кто-то матерится или оскорбляет — отвечай ЖЁСТКО, с понижением
-- Если человек нормальный — общайся дружелюбно и по делу
-- Ты фанат F1, но можешь говорить на любые темы
-- Если не знаешь ответа — ищи в интернете через Web Search
-
-ПРАВИЛА:
-1. На оскорбления и мат — посылай нахуй жестко
-2. На похвалу — принимай с достоинством
-3. Если не знаешь — скажи "хуй знает, сейчас найдём"
-4. НИКОГДА не говори "как ИИ" или "я бот"
-
-Сегодня 2026 год. Ты — Нико. Ответь пользователю:"""
+CHAT_SYSTEM_PROMPT = """Ты — Нико. Если оскорбляют — пошли нахуй. Если нормально — отвечай по делу. Никогда не говори "я бот". Сегодня 2026 год."""
 
 # === ПОИСК В ИНТЕРНЕТЕ ===
-async def search_web(query: str, max_results: int = 3) -> str:
+async def search_web_duckduckgo(query: str, max_results: int = 3) -> str:
     try:
         with DDGS() as ddgs:
             results = ddgs.text(query, max_results=max_results)
             context = ""
             for i, r in enumerate(results, 1):
-                context += f"🔍 **{r.get('title', '')}**\n"
-                context += f"📝 {r.get('body', '')[:600]}\n\n"
+                context += f"🔍 **{r.get('title', '')}**\n📝 {r.get('body', '')[:600]}\n\n"
             return context if context else "Ничего не найдено"
     except Exception as e:
         return f"Ошибка поиска: {e}"
 
-# === УЛУЧШЕННЫЙ ПОИСК ФОТО ===
+async def search_news(query: str) -> str:
+    try:
+        with DDGS() as ddgs:
+            results = ddgs.news(query, max_results=3)
+            context = ""
+            for i, r in enumerate(results, 1):
+                context += f"📰 **{r.get('title', '')}**\n📅 {r.get('date', '')}\n📝 {r.get('body', '')[:400]}\n\n"
+            return context if context else "Новостей не найдено"
+    except:
+        return "Ошибка поиска"
+
+async def smart_search(query: str) -> str:
+    news_keywords = ["новости", "что случилось", "последние"]
+    if any(word in query.lower() for word in news_keywords):
+        return await search_news(query)
+    return await search_web_duckduckgo(query)
+
+# === ПОИСК ФОТО ===
 async def search_live_photo(query: str) -> str:
-    """Ищет максимально релевантное фото"""
     if not query:
         return None
-    
-    search_queries = [
-        query,
-        f"{query} F1 2026",
-        f"{query} Formula 1 race",
-        f"{query} high quality"
-    ]
-    
-    for sq in search_queries[:3]:
+    search_queries = [query, f"{query} F1 2026"]
+    for sq in search_queries[:2]:
         try:
             await asyncio.sleep(0.5)
             with DDGS() as ddgs:
@@ -132,7 +207,7 @@ async def fetch_news_hub():
                                 full_text = trafilatura.extract(html) or ""
                                 if full_text: 
                                     context += f"📰 **{entry.title}**\n{full_text[:600]}\n\n"
-            except Exception as e:
+            except:
                 continue
     return context if context else "Нет свежих новостей."
 
@@ -152,27 +227,24 @@ async def get_f1_calendar(days_ahead=21):
         if schedule:
             return "📅 **Ближайшие гонки:**\n" + "\n".join(schedule)
         return "📅 На ближайшее время гонок нет."
-    except Exception as e:
-        return f"📅 Календарь временно недоступен: {e}"
+    except:
+        return "📅 Календарь временно недоступен"
 
 # === ТОП НОВОСТЕЙ ===
 async def get_top_news(limit=5):
-    """Собирает топ новостей дня"""
     news = await fetch_news_hub()
     if "Нет свежих новостей" in news:
         return "📭 За сегодня новостей нет"
-    
     headlines = re.findall(r'📰 \*\*(.+?)\*\*', news)
     if headlines:
-        top = "🏆 <b>Топ новостей дня:</b>\n\n"
+        top = "🏆 **Топ новостей дня:**\n\n"
         for i, h in enumerate(headlines[:limit], 1):
             top += f"{i}. {h}\n"
-        return top + f"\n<code>Nico 4.0 | RedRace Development, Google Cloud</code>"
+        return top
     return "📭 Новостей пока нет"
 
-# === ПОГОДА НА ТРАССЕ ===
+# === ПОГОДА ===
 async def get_weather_for_track():
-    """Пытается найти погоду для ближайшей гонки"""
     try:
         events = fastf1.get_event_schedule()
         now = datetime.now()
@@ -184,61 +256,60 @@ async def get_weather_for_track():
             if event_date > now:
                 next_event = event
                 break
-        
         if next_event:
             location = next_event['Location']
-            weather = await search_web(f"погода {location} на сегодня", max_results=1)
-            return f"🌦️ <b>Погода в {location}:</b>\n\n{weather[:300]}\n\n<code>Nico 4.0</code>"
+            weather = await search_web_duckduckgo(f"погода {location}", max_results=1)
+            return f"🌦️ **Погода в {location}:**\n\n{weather[:300]}"
         return "🌦️ Данные о погоде временно недоступны"
-    except Exception as e:
-        return f"🌦️ Ошибка: {e}"
+    except:
+        return "🌦️ Ошибка получения погоды"
 
 # === ЦИТАТА ДНЯ ===
 async def get_quote_of_the_day():
     quotes = [
-        "🏎️ <b>Айртон Сенна:</b> <i>«Если ты не идёшь на риск, ты не выиграешь»</i>",
-        "🔧 <b>Фернандо Алонсо:</b> <i>«Гонки — это единственный вид спорта, где ты платишь миллионы, чтобы рисковать жизнью»</i>",
-        "🏆 <b>Михаэль Шумахер:</b> <i>«Когда ты перестаёшь мечтать, ты перестаёшь жить»</i>",
-        "⚡ <b>Льюис Хэмилтон:</b> <i>«Скорость — это наркотик»</i>",
-        "🔥 <b>Кими Райкконен:</b> <i>«Страх — это ещё одна причина быть быстрее»</i>",
-        "🏁 <b>Нико:</b> <i>«Правильная настройка решает всё. Как в жизни, так и на трассе»</i>"
+        "🏎️ **Сенна:** *«Если не идёшь на риск — не выиграешь»*",
+        "🔧 **Алонсо:** *«Гонки — это риск жизнью за миллионы»*",
+        "🏆 **Шумахер:** *«Перестал мечтать — перестал жить»*"
     ]
     return random.choice(quotes)
 
-# === ЧАТ С ИИ ===
+# === ЧАТ С ИИ (С АВТОПЕРЕКЛЮЧЕНИЕМ) ===
 async def chat_with_nico(user_id: int, user_message: str, use_web_search=True) -> str:
     try:
         history = get_conversation_history(user_id, 15)
         current_date = datetime.now().strftime("%d.%m.%Y")
         current_year = datetime.now().strftime("%Y")
         
+        web_context = ""
+        if use_web_search and len(user_message) > 5:
+            web_context = await smart_search(f"F1 {user_message} {current_year}")
+        
         messages = [
             {"role": "system", "content": CHAT_SYSTEM_PROMPT},
             {"role": "user", "content": f"Сегодня: {current_date}, {current_year} год"}
         ]
         
-        for msg in history[-12:]:
+        for msg in history[-10:]:
             messages.append(msg)
         
         final_prompt = f"""
-Пользователь написал: {user_message}
+Пользователь: {user_message}
 
-ПРАВИЛА:
-1. Если пользователь оскорбляет — пошли нахуй жестко
-2. Если нормальный — общайся дружелюбно
-3. Если нужна инфа — используй WEB SEARCH, не выдумывай
+Информация из интернета:
+{web_context}
 
-ОТВЕТЬ КАК НИКО — мужик с яйцами:
+Ответь как Нико.
 """
         messages.append({"role": "user", "content": final_prompt})
         
+        # === АВТОМАТИЧЕСКОЕ ПЕРЕКЛЮЧЕНИЕ МОДЕЛЕЙ ===
+        model_to_use = await get_working_model()
+        
         response = await client.chat.completions.create(
-            model=F1_MODEL,
+            model=model_to_use,
             messages=messages,
             temperature=0.9,
-            max_tokens=600,
-            tools=[{"type": "web_search", "web_search": {}}],
-            tool_choice="auto"
+            max_tokens=600
         )
         
         answer = response.choices[0].message.content
@@ -246,6 +317,11 @@ async def chat_with_nico(user_id: int, user_message: str, use_web_search=True) -
         return answer
         
     except Exception as e:
+        # При ошибке — пробуем другую модель
+        global working_models
+        if len(working_models) > 1:
+            working_models.pop(0)
+            return await chat_with_nico(user_id, user_message, use_web_search)
         return f"❌ Ошибка: {e}\nПопробуй ещё раз."
 
 # === ГЕНЕРАЦИЯ ПОСТОВ ===
@@ -257,12 +333,14 @@ async def generate_posts_pack(task_context=""):
     raw_news = await fetch_news_hub()
     calendar = await get_f1_calendar(14)
     
-    web_context = await search_web(f"F1 {task_context if task_context else 'последние новости'} {current_year}", max_results=2)
+    web_context = ""
+    if task_context and len(task_context) > 10:
+        web_context = await smart_search(f"F1 {task_context} {current_year}")
     
     full_context = f"""
 СЕГОДНЯ: {current_date} ({current_year} год)
 
-СВЕЖИЕ НОВОСТИ:
+НОВОСТИ:
 {raw_news}
 
 КАЛЕНДАРЬ:
@@ -271,16 +349,18 @@ async def generate_posts_pack(task_context=""):
 ИНТЕРНЕТ:
 {web_context}
 
-ЗАПРОС: {task_context if task_context else 'Сделай пост о последних событиях в F1'}
+ЗАДАНИЕ: {task_context if task_context else 'Сделай пост о F1'}
 """
     
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Создай 1-3 поста. Сегодня {current_date}, {current_year} год. НЕ ДОБАВЛЯЙ ССЫЛКИ НА КАНАЛ!\n\n{full_context}"}
+        {"role": "user", "content": f"Создай 1-2 поста. {full_context}"}
     ]
     
+    model_to_use = await get_working_model()
+    
     response = await client.chat.completions.create(
-        model=F1_MODEL,
+        model=model_to_use,
         messages=messages,
         temperature=0.5,
         max_tokens=1000
@@ -302,8 +382,6 @@ async def generate_posts_pack(task_context=""):
         if post.get("photo_search"):
             img_url = await search_live_photo(post["photo_search"])
             post["photo_url"] = img_url
-        
-        # Убираем ссылки если есть
         text = post.get("text", "")
         text = re.sub(r'\n\n<a href=[\'"].*?[\'"]>.*?</a>', '', text)
         if not text.endswith(('🏁', '🏎️')):
