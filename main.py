@@ -15,8 +15,7 @@ from scraper import (
     get_weather_for_track, 
     get_quote_of_the_day, 
     smart_search,
-    get_last_race_result,
-    text_to_speech
+    get_last_race_result
 )
 from database import init_db, get_stats, save_post
 
@@ -30,26 +29,21 @@ ADMIN_IDS = [7025868617]  # Твой Telegram ID
 STATE = {
     "pub_mode": "DIRECT",
     "start_time": time.time(),
-    "auto_interval": 7200,  # 2 часа
-    "chat_mode": False,
-    "voice_mode": False  # Голосовые ответы
+    "auto_interval": 7200,
+    "chat_mode": False
 }
 
 DIGEST_BUFFER = []
 ADMIN_CHAT_ID = None
 bot = None
 
-# Инициализируем базу данных
 init_db()
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
-# === МЕНЮ С КНОПКАМИ ===
 def get_main_menu(user_id):
     markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
-    
-    # Кнопки для всех
     markup.add(
         KeyboardButton("🏁 О боте"),
         KeyboardButton("📅 Календарь"),
@@ -59,8 +53,6 @@ def get_main_menu(user_id):
         KeyboardButton("🏎️ Цитата дня"),
         KeyboardButton("🏁 Результаты")
     )
-    
-    # Дополнительные кнопки для админа
     if is_admin(user_id):
         markup.add(
             KeyboardButton("📝 Сделать пост"),
@@ -69,15 +61,12 @@ def get_main_menu(user_id):
             KeyboardButton("🧠 Очистить БД"),
             KeyboardButton("👥 Пользователи"),
             KeyboardButton("📜 История"),
-            KeyboardButton("⚙️ Настройки"),
-            KeyboardButton("🎤 Голосовой режим")
+            KeyboardButton("⚙️ Настройки")
         )
-    
     return markup
 
-# === HTTP СЕРВЕР ===
 async def health_check(request):
-    return web.Response(text="Nico 5.0 is alive", status=200)
+    return web.Response(text="Nico 5.5 is alive", status=200)
 
 async def start_keep_alive_server():
     app = web.Application()
@@ -90,7 +79,6 @@ async def start_keep_alive_server():
     await site.start()
     print(f"✅ Keep-alive server on port {port}")
 
-# === ОТПРАВКА ПОСТОВ ===
 async def send_crafted_post(target_chat, text, photo_url=None, with_publish_button=False):
     if not bot:
         return
@@ -109,11 +97,9 @@ async def send_crafted_post(target_chat, text, photo_url=None, with_publish_butt
         except:
             pass
 
-# === АДМИН-КОНСОЛЬ ===
 async def admin_panel(m):
     global ADMIN_CHAT_ID
     ADMIN_CHAT_ID = m.chat.id
-    
     uptime = time.time() - STATE["start_time"]
     stats = get_stats()
     
@@ -123,7 +109,6 @@ async def admin_panel(m):
         InlineKeyboardButton("🔍 Скан", callback_data="force_scan"),
         InlineKeyboardButton("📅 Календарь", callback_data="calendar"),
         InlineKeyboardButton("💬 Режим чата", callback_data="chat_mode"),
-        InlineKeyboardButton("🎤 Голос", callback_data="voice_mode"),
         InlineKeyboardButton("📦 Дайджест", callback_data="rel_dig"),
         InlineKeyboardButton("📊 Статистика", callback_data="show_stats"),
         InlineKeyboardButton("👥 Пользователи", callback_data="show_users"),
@@ -133,61 +118,57 @@ async def admin_panel(m):
     )
     
     status = (
-        f"<b>👑 NICO 5.0 | ADMIN CONSOLE</b>\n"
+        f"<b>👑 NICO 5.5 | ADMIN CONSOLE</b>\n"
         f"<code>═══════════════════════════</code>\n"
         f"├ 🕐 Аптайм: <code>{int(uptime//3600)}ч {int((uptime%3600)//60)}м</code>\n"
         f"├ 🎯 Режим: <b>{'Чат' if STATE['chat_mode'] else 'Авто'}</b>\n"
-        f"├ 🎤 Голос: <b>{'Вкл' if STATE['voice_mode'] else 'Выкл'}</b>\n"
         f"├ ⏱ Интервал: <b>{STATE['auto_interval']//3600}ч</b>\n"
         f"├ 📦 Буфер: <b>{len(DIGEST_BUFFER)}</b>\n"
         f"├ 📝 Постов: <b>{stats['posts']}</b>\n"
         f"├ 💬 Диалогов: <b>{stats['chats']}</b>\n"
         f"└ 👑 Админ: <b>Активен</b>\n"
         f"<code>═══════════════════════════</code>\n"
-        f"<i>Nico 5.0 | Code by: RedRace Development, Google Cloud</i>"
+        f"<i>Nico 5.5 | Code by: RedRace Development, Google Cloud</i>"
     )
     await bot.send_message(m.chat.id, status, parse_mode="HTML", reply_markup=kb)
 
-# === ПОЛЬЗОВАТЕЛЬСКАЯ КОНСОЛЬ ===
 async def user_panel(m):
     uptime = time.time() - STATE["start_time"]
     stats = get_stats()
     
     status = (
-        f"<b>🏎️ NICO 5.0 | F1 ASSISTANT</b>\n"
+        f"<b>🏎️ NICO 5.5 | F1 ASSISTANT</b>\n"
         f"<code>─────────────────────</code>\n"
         f"├ 🤖 <i>Твой гоночный инженер</i>\n"
         f"├ 📊 Сервер: <code>{int(uptime//3600)}ч</code>\n"
         f"├ 💬 Диалогов: <b>{stats['chats']}</b>\n"
         f"├ 📝 Постов: <b>{stats['posts']}</b>\n"
-        f"├ 🎤 Голос: <b>{'Вкл' if STATE['voice_mode'] else 'Выкл'}</b>\n"
-        f"└ 🔧 Версия: <b>5.0</b>\n"
+        f"└ 🔧 Версия: <b>5.5</b>\n"
         f"<code>─────────────────────</code>\n"
         f"<i>Просто напиши вопрос про F1!</i>\n\n"
-        f"<code>Nico 5.0 | Code by: RedRace Development, Google Cloud</code>"
+        f"<code>Nico 5.5 | Code by: RedRace Development, Google Cloud</code>"
     )
     await bot.send_message(m.chat.id, status, parse_mode="HTML", reply_markup=get_main_menu(m.chat.id))
 
-# === ОБРАБОТКА КНОПОК МЕНЮ ===
 async def handle_menu_buttons(m):
     text = m.text
     
     if text == "🏁 О боте":
         await bot.send_message(m.chat.id,
-            "🏎️ <b>NICO 5.0 — Гоночный инженер</b>\n\n"
+            "🏎️ <b>NICO 5.5 — Гоночный инженер</b>\n\n"
             "📌 <b>Что умею:</b>\n"
             "• Отвечаю на вопросы про F1\n"
             "• Ищу новости в интернете\n"
             "• Показываю календарь гонок\n"
             "• Рассказываю погоду на трассе\n"
             "• Делаю посты по запросу\n"
-            "• Помню историю диалогов\n"
-            "• Отвечаю голосом (включи в настройках)\n\n"
+            "• Помню историю диалогов\n\n"
             "💡 <b>Команды:</b>\n"
             "• /ask [вопрос] — поиск в сети\n"
             "• /stats — статистика\n"
-            "• /forget — очистить память\n\n"
-            "<code>Nico 5.0 | Code by: RedRace Development, Google Cloud</code>",
+            "• /forget — очистить память\n"
+            "• <b>НИКО, ВЫЛОЖИ ПОСТ</b> — сделает пост на тему\n\n"
+            "<code>Nico 5.5 | Code by: RedRace Development, Google Cloud</code>",
             parse_mode="HTML")
     
     elif text == "📅 Календарь":
@@ -212,12 +193,12 @@ async def handle_menu_buttons(m):
             "Просто напиши свой вопрос про F1.\n"
             "Я отвечу с характером и найду инфу в интернете.\n\n"
             "🏁 <i>Задавай вопрос!</i>\n\n"
-            "<code>Nico 5.0 | Code by: RedRace Development, Google Cloud</code>",
+            "<code>Nico 5.5 | Code by: RedRace Development, Google Cloud</code>",
             parse_mode="HTML")
     
     elif text == "🏎️ Цитата дня":
         quote = await get_quote_of_the_day()
-        await bot.send_message(m.chat.id, f"📜 <b>Цитата дня</b>\n\n{quote}\n\n<code>Nico 5.0</code>", parse_mode="HTML")
+        await bot.send_message(m.chat.id, f"📜 <b>Цитата дня</b>\n\n{quote}\n\n<code>Nico 5.5</code>", parse_mode="HTML")
     
     elif text == "🏁 Результаты":
         status_msg = await bot.send_message(m.chat.id, "🏁 Получаю результаты последней гонки...")
@@ -225,7 +206,6 @@ async def handle_menu_buttons(m):
         await bot.delete_message(m.chat.id, status_msg.message_id)
         await bot.send_message(m.chat.id, results, parse_mode="HTML")
     
-    # === АДМИНСКИЕ КНОПКИ ===
     elif text == "📝 Сделать пост" and is_admin(m.chat.id):
         await bot.send_message(m.chat.id,
             "📝 <b>Напиши тему для поста</b>\n\n"
@@ -233,6 +213,7 @@ async def handle_menu_buttons(m):
             "- сделай пост про Ferrari\n"
             "- пост о Red Bull Racing\n"
             "- аналитика по шинам\n\n"
+            "Или просто напиши: <b>НИКО, ВЫЛОЖИ ПОСТ ПРО...</b>\n\n"
             "Жду тему...",
             parse_mode="HTML")
     
@@ -240,13 +221,13 @@ async def handle_menu_buttons(m):
         stats = get_stats()
         uptime = time.time() - STATE["start_time"]
         await bot.send_message(m.chat.id,
-            f"📊 <b>Статистика Nico 5.0</b>\n"
+            f"📊 <b>Статистика Nico 5.5</b>\n"
             f"━━━━━━━━━━━━━━━━━\n"
             f"📝 Постов: {stats['posts']}\n"
             f"💬 Диалогов: {stats['chats']}\n"
             f"⏱ Аптайм: {int(uptime//3600)}ч\n"
             f"━━━━━━━━━━━━━━━━━\n"
-            f"<code>Nico 5.0 | RedRace Development</code>",
+            f"<code>Nico 5.5 | RedRace Development</code>",
             parse_mode="HTML")
     
     elif text == "📦 Дайджест" and is_admin(m.chat.id):
@@ -298,29 +279,22 @@ async def handle_menu_buttons(m):
         c.execute("DELETE FROM chat_history")
         conn.commit()
         conn.close()
-        await bot.send_message(m.chat.id, "🧠 <b>Вся история диалогов очищена!</b>\n\n<code>Nico 5.0</code>", parse_mode="HTML")
+        await bot.send_message(m.chat.id, "🧠 <b>Вся история диалогов очищена!</b>\n\n<code>Nico 5.5</code>", parse_mode="HTML")
     
     elif text == "⚙️ Настройки" and is_admin(m.chat.id):
         kb = InlineKeyboardMarkup(row_width=1)
         kb.add(
             InlineKeyboardButton("⏱ Интервал постинга", callback_data="set_interval"),
-            InlineKeyboardButton("🎤 Голосовые ответы", callback_data="toggle_voice"),
             InlineKeyboardButton("🔙 Назад", callback_data="back_to_admin")
         )
         await bot.send_message(m.chat.id, "⚙️ <b>Настройки бота</b>\n\nВыбери параметр:", parse_mode="HTML", reply_markup=kb)
-    
-    elif text == "🎤 Голосовой режим" and is_admin(m.chat.id):
-        STATE["voice_mode"] = not STATE["voice_mode"]
-        status = "включён" if STATE["voice_mode"] else "выключен"
-        await bot.send_message(m.chat.id, f"🎤 Голосовой режим {status}")
 
-# === ОБРАБОТЧИК СООБЩЕНИЙ ===
 async def manual_trigger(m):
     if m.text and m.text.startswith('/'):
         return
     
     menu_buttons = ["🏁 О боте", "📅 Календарь", "🏆 Топ новостей", "🌦️ Погода", "💬 Чат", "🏎️ Цитата дня", "🏁 Результаты",
-                    "📝 Сделать пост", "📊 Статистика", "📦 Дайджест", "🧠 Очистить БД", "👥 Пользователи", "📜 История", "⚙️ Настройки", "🎤 Голосовой режим"]
+                    "📝 Сделать пост", "📊 Статистика", "📦 Дайджест", "🧠 Очистить БД", "👥 Пользователи", "📜 История", "⚙️ Настройки"]
     if m.text in menu_buttons:
         await handle_menu_buttons(m)
         return
@@ -329,18 +303,30 @@ async def manual_trigger(m):
     status_msg = await bot.send_message(m.chat.id, "🤔 <i>Анализирую...</i>", parse_mode="HTML")
     
     try:
-        if any(word in user_text.lower() for word in ["пост", "сделай пост", "выложи", "опубликуй", "создай пост"]):
+        # === КОМАНДЫ ДЛЯ ПОСТА ===
+        post_triggers = ["пост", "сделай пост", "выложи", "опубликуй", "создай пост", "напиши пост", "ии выложи", "нико сделай"]
+        if any(word in user_text.lower() for word in post_triggers):
             if not is_admin(m.chat.id):
                 await bot.send_message(m.chat.id, "⛔ Только администратор может делать посты")
             else:
-                posts = await generate_posts_pack(user_text)
+                # Извлекаем тему поста
+                topic = user_text
+                for trigger in post_triggers:
+                    topic = re.sub(trigger, '', topic, flags=re.IGNORECASE)
+                topic = topic.strip()
+                if not topic or len(topic) < 3:
+                    topic = "последние новости F1"
+                
+                await bot.send_message(m.chat.id, f"📝 Генерирую пост на тему: <b>{topic}</b>...", parse_mode="HTML")
+                posts = await generate_posts_pack(topic)
                 if posts:
                     for post in posts[:2]:
                         await send_crafted_post(m.chat.id, post["text"], post.get("photo_url"), with_publish_button=True)
                         if post.get("text"):
                             save_post(post["text"], post.get("photo_url"))
+                    await bot.send_message(m.chat.id, "✅ Пост готов! Можешь отредактировать или сразу опубликовать в канал.", parse_mode="HTML")
                 else:
-                    await bot.send_message(m.chat.id, "❌ Не удалось сгенерировать пост")
+                    await bot.send_message(m.chat.id, "❌ Не удалось сгенерировать пост по этой теме")
         
         elif any(word in user_text.lower() for word in ["новости", "что нового", "свежие новости"]):
             posts = await generate_posts_pack("")
@@ -357,21 +343,14 @@ async def manual_trigger(m):
             await bot.send_message(m.chat.id, cal, parse_mode="HTML")
         
         else:
-            result = await chat_with_nico(m.chat.id, user_text, use_web_search=True, voice_response=STATE["voice_mode"])
-            
-            if result["voice"]:
-                with open(result["voice"], 'rb') as voice_file:
-                    await bot.send_voice(m.chat.id, voice_file, caption=result["text"][:200], parse_mode="HTML")
-                os.unlink(result["voice"])
-            else:
-                await bot.send_message(m.chat.id, result["text"], parse_mode="HTML")
+            result = await chat_with_nico(m.chat.id, user_text, use_web_search=True)
+            await bot.send_message(m.chat.id, result, parse_mode="HTML")
             
     except Exception as e:
         await bot.send_message(m.chat.id, f"❌ Ошибка: {e}")
     
     await bot.delete_message(m.chat.id, status_msg.message_id)
 
-# === ОБРАБОТЧИК КНОПОК ===
 async def handle_callbacks(call):
     global DIGEST_BUFFER
     
@@ -379,13 +358,6 @@ async def handle_callbacks(call):
         await admin_panel(call.message)
     elif call.data == "set_interval":
         await bot.send_message(call.message.chat.id, "Введи интервал в часах (1-24):")
-    elif call.data == "toggle_voice":
-        STATE["voice_mode"] = not STATE["voice_mode"]
-        await bot.answer_callback_query(call.id, f"Голос: {'Вкл' if STATE['voice_mode'] else 'Выкл'}")
-    elif call.data == "voice_mode":
-        STATE["voice_mode"] = not STATE["voice_mode"]
-        await bot.answer_callback_query(call.id, f"Голос: {'Вкл' if STATE['voice_mode'] else 'Выкл'}")
-        await admin_panel(call.message)
     elif call.data == "force_scan":
         await bot.answer_callback_query(call.id, "🔍 Сканирую...")
         posts = await generate_posts_pack("")
@@ -414,8 +386,7 @@ async def handle_callbacks(call):
     elif call.data == "show_stats":
         stats = get_stats()
         uptime = time.time() - STATE["start_time"]
-        await bot.send_message(call.message.chat.id,
-            f"📊 Статистика\nПостов: {stats['posts']}\nДиалогов: {stats['chats']}\nАптайм: {int(uptime//3600)}ч")
+        await bot.send_message(call.message.chat.id, f"📊 Статистика\nПостов: {stats['posts']}\nДиалогов: {stats['chats']}\nАптайм: {int(uptime//3600)}ч")
     elif call.data == "show_users":
         conn = sqlite3.connect("nico_bot.db")
         c = conn.cursor()
@@ -457,13 +428,12 @@ async def handle_callbacks(call):
     
     await bot.answer_callback_query(call.id)
 
-# === КОМАНДЫ ===
 async def start_command(m):
     if is_admin(m.chat.id):
         await bot.send_message(m.chat.id, "👑 Добро пожаловать, Админ!", reply_markup=get_main_menu(m.chat.id))
         await admin_panel(m)
     else:
-        await bot.send_message(m.chat.id, "🏎️ Добро пожаловать в Nico 5.0!", reply_markup=get_main_menu(m.chat.id))
+        await bot.send_message(m.chat.id, "🏎️ Добро пожаловать в Nico 5.5!", reply_markup=get_main_menu(m.chat.id))
         await user_panel(m)
 
 async def ask_command(m):
@@ -480,11 +450,11 @@ async def stats_command(m):
     stats = get_stats()
     uptime = time.time() - STATE["start_time"]
     await bot.reply_to(m,
-        f"📊 <b>Статистика Nico 5.0</b>\n"
+        f"📊 <b>Статистика Nico 5.5</b>\n"
         f"📝 Постов: {stats['posts']}\n"
         f"💬 Диалогов: {stats['chats']}\n"
         f"⏱ Аптайм: {int(uptime//3600)}ч\n"
-        f"<code>Nico 5.0 | RedRace Development, Google Cloud</code>", parse_mode="HTML")
+        f"<code>Nico 5.5 | RedRace Development, Google Cloud</code>", parse_mode="HTML")
 
 async def forget_command(m):
     conn = sqlite3.connect("nico_bot.db")
@@ -492,7 +462,7 @@ async def forget_command(m):
     c.execute("DELETE FROM chat_history WHERE user_id = ?", (m.chat.id,))
     conn.commit()
     conn.close()
-    await bot.reply_to(m, "🧠 История диалога очищена!\n\n<code>Nico 5.0</code>", parse_mode="HTML")
+    await bot.reply_to(m, "🧠 История диалога очищена!\n\n<code>Nico 5.5</code>", parse_mode="HTML")
 
 async def handle_interval_input(m):
     if not is_admin(m.chat.id):
@@ -507,7 +477,6 @@ async def handle_interval_input(m):
     except:
         await bot.send_message(m.chat.id, "❌ Введи целое число часов")
 
-# === АВТОПОСТИНГ ===
 async def auto_post_worker():
     while True:
         await asyncio.sleep(STATE['auto_interval'])
@@ -524,7 +493,6 @@ async def auto_post_worker():
         except Exception as e:
             print(f"Auto post error: {e}")
 
-# === ПОЛЛИНГ ===
 async def polling_worker():
     while True:
         try:
@@ -533,7 +501,6 @@ async def polling_worker():
             print(f"Polling error: {e}, reconnect in 5s")
             await asyncio.sleep(5)
 
-# === РЕГИСТРАЦИЯ ===
 def register_handlers(bot_instance):
     bot_instance.register_message_handler(start_command, commands=['start'])
     bot_instance.register_message_handler(admin_panel, commands=['admin'])
@@ -544,7 +511,6 @@ def register_handlers(bot_instance):
     bot_instance.register_message_handler(manual_trigger, func=lambda m: True, content_types=['text'])
     bot_instance.register_callback_query_handler(handle_callbacks, func=lambda call: True)
 
-# === MAIN ===
 async def main():
     global bot
     bot = AsyncTeleBot(BOT_TOKEN)
@@ -552,12 +518,11 @@ async def main():
     await start_keep_alive_server()
     asyncio.create_task(auto_post_worker())
     asyncio.create_task(polling_worker())
-    print("🚀 NICO 5.0 STARTED!")
+    print("🚀 NICO 5.5 STARTED!")
     print(f"👑 Admin ID: {ADMIN_IDS}")
     print("💬 Чат-бот с поиском в интернете активен")
     print("📊 База данных подключена")
     print("🔘 Меню с кнопками включено")
-    print("🎤 Голосовые ответы доступны")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
