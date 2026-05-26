@@ -1,20 +1,12 @@
-FROM python:3.11-slim
-
-ENV PYTHONUNBUFFERED=1
-ENV TZ=UTC
-
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libxml2 \
-    libxslt1.1 \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "-u", "main.py"]
+pyTelegramBotAPI==4.16.0
+aiohttp==3.9.0
+feedparser==6.0.10
+trafilatura==1.6.0
+lxml==5.1.0
+lxml_html_clean==0.1.0
+argus-search>=0.3.0
+openai==1.14.0
+httpx>=0.27.0
+qdrant-client>=1.7.0
+sentence-transformers>=2.2.0
+edge-tts>=6.1.0
