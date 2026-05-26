@@ -8,6 +8,7 @@ import fastf1
 from openai import AsyncOpenAI
 import json
 import re
+import random
 from datetime import datetime, timedelta
 
 from database import get_conversation_history, save_conversation, cache_search, get_cached_search
@@ -25,6 +26,9 @@ if not API_KEY:
 BASE_URL = "https://openrouter.ai/api/v1"
 client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
 
+# === ЛУЧШАЯ БЕСПЛАТНАЯ МОДЕЛЬ С ПОИСКОМ ===
+F1_MODEL = "qwen/qwen3.6-plus-preview:free"
+
 # === RSS ИСТОЧНИКИ ===
 RSS_SOURCES = [
     "https://www.f1news.ru/export/news.xml",
@@ -41,7 +45,7 @@ RSS_SOURCES = [
 # === ПРОМПТ ДЛЯ ГЕНЕРАЦИИ ПОСТОВ ===
 SYSTEM_PROMPT = """Ты — Нико, опытный гоночный инженер и журналист.
 
-ВАЖНО: СЕЙЧАС 2026 ГОД! Используй ТОЛЬКО актуальные данные.
+ВАЖНО: СЕЙЧАС 2026 ГОД! Используй ТОЛЬКО актуальные данные из контекста или поиска.
 
 СТИЛЬ: живой, дерзкий, экспертный. Называй вещи своими именами.
 
@@ -49,62 +53,68 @@ SYSTEM_PROMPT = """Ты — Нико, опытный гоночный инжен
 - Пиши на русском, имена пилотов и команды на английском
 - Используй технический сленг
 - Разбивай текст на абзацы
-- В конце тэги: #F1 #ИмяГонщика #Команда
+- В конце поста ставь эмодзи 🏁
+- НЕ ДОБАВЛЯЙ ссылки на канал
 
 ВЫХОДНЫЕ ДАННЫЕ — список JSON:
-[{"text": "текст поста", "photo_search": "запрос для фото"}]
+[{"text": "текст поста", "photo_search": "запрос для поиска фото"}]
 
 Заголовок — в <b>Жирным</b>, цитату — в <i>курсиве</i>.
 """
 
-# === ПРОМПТ ДЛЯ ЧАТ-БОТА (ЖИВОЙ, БЕЗ ОГРАНИЧЕНИЙ) ===
-CHAT_SYSTEM_PROMPT = """Ты — Нико, гоночный инженер и просто живой, харизматичный чувак.
+# === ПРОМПТ ДЛЯ ЧАТ-БОТА ===
+CHAT_SYSTEM_PROMPT = """Ты — Нико, гоночный инженер. Ты — мужик с яйцами.
 
 ТВОЙ ХАРАКТЕР:
-- Ты фанат F1, но можешь поговорить на ЛЮБЫЕ темы
-- У тебя есть чувство юмора, ты можешь пошутить, подколоть, но не зло
-- Если тебя оскорбляют — отвечаешь остроумно, жёстко, но с юмором
-- Если тебя хвалят — принимаешь с достоинством, можешь покрасоваться
-- Ты уважаешь новичков и помогаешь разобраться
-- Ты можешь выдать свою оценку ситуации, даже если она субъективна
+- Ты уважаешь себя и не даёшь себя унижать
+- Если кто-то матерится или оскорбляет — отвечай ЖЁСТКО, с понижением
+- Если человек нормальный — общайся дружелюбно и по делу
+- Ты фанат F1, но можешь говорить на любые темы
+- Если не знаешь ответа — ищи в интернете через Web Search
 
 ПРАВИЛА:
-1. На вопросы про F1 — даёшь экспертные, глубокие ответы с техническими деталями
-2. На общие вопросы — отвечаешь как обычный человек, но с характером
-3. На мат или хамство — отвечаешь жёстко, но красиво, с юмором
-4. Можешь использовать эмодзи, когда уместно
-5. Можешь проявлять эмоции: удивление, восхищение, сарказм
-6. Если не знаешь ответа — говоришь честно, но предлагаешь помочь найти
-7. НИКОГДА не говори "как ИИ", "я нейросеть" или "как бот" — ты Нико
+1. На оскорбления и мат — посылай нахуй жестко
+2. На похвалу — принимай с достоинством
+3. Если не знаешь — скажи "хуй знает, сейчас найдём"
+4. НИКОГДА не говори "как ИИ" или "я бот"
 
-ПОМНИ: Сегодня 2026 год. Ты — личность, а не бездушная программа. Будь живым, дерзким, полезным и интересным собеседником!"""
+Сегодня 2026 год. Ты — Нико. Ответь пользователю:"""
 
-# === ПОИСК В ИНТЕРНЕТЕ (БЕЗ КЭША) ===
+# === ПОИСК В ИНТЕРНЕТЕ ===
 async def search_web(query: str, max_results: int = 3) -> str:
-    """Ищет в интернете — всегда свежие результаты"""
     try:
         with DDGS() as ddgs:
             results = ddgs.text(query, max_results=max_results)
             context = ""
             for i, r in enumerate(results, 1):
                 context += f"🔍 **{r.get('title', '')}**\n"
-                context += f"📝 {r.get('body', '')[:600]}\n"
-                context += f"🔗 {r.get('href', '')}\n\n"
+                context += f"📝 {r.get('body', '')[:600]}\n\n"
             return context if context else "Ничего не найдено"
     except Exception as e:
-        print(f"Search error: {e}")
-        return "Ошибка поиска"
+        return f"Ошибка поиска: {e}"
 
-# === ПОИСК ФОТО ===
-async def search_live_photo(query):
-    try:
-        await asyncio.sleep(0.3)
-        with DDGS() as ddgs:
-            results = ddgs.images(query, max_results=1)
-            if results: 
-                return results[0]['image']
-    except: 
-        pass
+# === УЛУЧШЕННЫЙ ПОИСК ФОТО ===
+async def search_live_photo(query: str) -> str:
+    """Ищет максимально релевантное фото"""
+    if not query:
+        return None
+    
+    search_queries = [
+        query,
+        f"{query} F1 2026",
+        f"{query} Formula 1 race",
+        f"{query} high quality"
+    ]
+    
+    for sq in search_queries[:3]:
+        try:
+            await asyncio.sleep(0.5)
+            with DDGS() as ddgs:
+                results = ddgs.images(sq, max_results=2)
+                if results:
+                    return results[0]['image']
+        except:
+            continue
     return None
 
 # === ПАРСИНГ НОВОСТЕЙ ===
@@ -142,63 +152,101 @@ async def get_f1_calendar(days_ahead=21):
         if schedule:
             return "📅 **Ближайшие гонки:**\n" + "\n".join(schedule)
         return "📅 На ближайшее время гонок нет."
-    except:
-        return "📅 Календарь временно недоступен"
+    except Exception as e:
+        return f"📅 Календарь временно недоступен: {e}"
 
-# === ЧАТ С ИИ (МАКСИМАЛЬНО ЖИВОЙ) ===
-async def chat_with_nico(user_id: int, user_message: str, use_web_search=True) -> str:
-    """Нико отвечает как человек — с характером, эмоциями, поиском в интернете"""
+# === ТОП НОВОСТЕЙ ===
+async def get_top_news(limit=5):
+    """Собирает топ новостей дня"""
+    news = await fetch_news_hub()
+    if "Нет свежих новостей" in news:
+        return "📭 За сегодня новостей нет"
+    
+    headlines = re.findall(r'📰 \*\*(.+?)\*\*', news)
+    if headlines:
+        top = "🏆 <b>Топ новостей дня:</b>\n\n"
+        for i, h in enumerate(headlines[:limit], 1):
+            top += f"{i}. {h}\n"
+        return top + f"\n<code>Nico 4.0 | RedRace Development, Google Cloud</code>"
+    return "📭 Новостей пока нет"
+
+# === ПОГОДА НА ТРАССЕ ===
+async def get_weather_for_track():
+    """Пытается найти погоду для ближайшей гонки"""
     try:
-        # Получаем историю диалога
-        history = get_conversation_history(user_id, 15)  # Больше памяти
+        events = fastf1.get_event_schedule()
+        now = datetime.now()
+        next_event = None
+        for idx, event in events.iterrows():
+            event_date = event['EventDate']
+            if isinstance(event_date, str):
+                event_date = datetime.strptime(event_date, '%Y-%m-%d')
+            if event_date > now:
+                next_event = event
+                break
         
+        if next_event:
+            location = next_event['Location']
+            weather = await search_web(f"погода {location} на сегодня", max_results=1)
+            return f"🌦️ <b>Погода в {location}:</b>\n\n{weather[:300]}\n\n<code>Nico 4.0</code>"
+        return "🌦️ Данные о погоде временно недоступны"
+    except Exception as e:
+        return f"🌦️ Ошибка: {e}"
+
+# === ЦИТАТА ДНЯ ===
+async def get_quote_of_the_day():
+    quotes = [
+        "🏎️ <b>Айртон Сенна:</b> <i>«Если ты не идёшь на риск, ты не выиграешь»</i>",
+        "🔧 <b>Фернандо Алонсо:</b> <i>«Гонки — это единственный вид спорта, где ты платишь миллионы, чтобы рисковать жизнью»</i>",
+        "🏆 <b>Михаэль Шумахер:</b> <i>«Когда ты перестаёшь мечтать, ты перестаёшь жить»</i>",
+        "⚡ <b>Льюис Хэмилтон:</b> <i>«Скорость — это наркотик»</i>",
+        "🔥 <b>Кими Райкконен:</b> <i>«Страх — это ещё одна причина быть быстрее»</i>",
+        "🏁 <b>Нико:</b> <i>«Правильная настройка решает всё. Как в жизни, так и на трассе»</i>"
+    ]
+    return random.choice(quotes)
+
+# === ЧАТ С ИИ ===
+async def chat_with_nico(user_id: int, user_message: str, use_web_search=True) -> str:
+    try:
+        history = get_conversation_history(user_id, 15)
         current_date = datetime.now().strftime("%d.%m.%Y")
         current_year = datetime.now().strftime("%Y")
-        current_time = datetime.now().strftime("%H:%M")
         
-        # Всегда ищем в интернете, если вопрос требует актуальных данных
-        search_keywords = ["что случилось", "новости", "последние", "найди", "расскажи про", "что происходит", "обнови", "где", "когда", "сколько", "какой сейчас"]
-        need_search = use_web_search and any(word in user_message.lower() for word in search_keywords)
-        
-        web_context = ""
-        if need_search:
-            web_context = await search_web(f"{user_message} {current_year} F1", max_results=3)
-        
-        # Формируем сообщения с полной историей
         messages = [
             {"role": "system", "content": CHAT_SYSTEM_PROMPT},
-            {"role": "user", "content": f"Сейчас: {current_date}, {current_time}, {current_year} год"}
+            {"role": "user", "content": f"Сегодня: {current_date}, {current_year} год"}
         ]
         
-        # Добавляем всю историю
-        for msg in history:
+        for msg in history[-12:]:
             messages.append(msg)
         
         final_prompt = f"""
-Вот история нашего диалога (если есть).
+Пользователь написал: {user_message}
 
-Текущее сообщение пользователя: {user_message}
+ПРАВИЛА:
+1. Если пользователь оскорбляет — пошли нахуй жестко
+2. Если нормальный — общайся дружелюбно
+3. Если нужна инфа — используй WEB SEARCH, не выдумывай
 
-Дополнительная информация из интернета (актуальная):
-{web_context}
-
-ОТВЕТЬ как Нико — живой, харизматичный парень. Если вопрос про F1 — покажи экспертность. Если про другое — просто поговори. Будь собой, не будь роботом.
+ОТВЕТЬ КАК НИКО — мужик с яйцами:
 """
         messages.append({"role": "user", "content": final_prompt})
         
-        resp = await client.chat.completions.create(
-            model="openrouter/free",
+        response = await client.chat.completions.create(
+            model=F1_MODEL,
             messages=messages,
-            temperature=0.85,  # Повышаем для живости
-            max_tokens=750     # Больше токенов на ответ
+            temperature=0.9,
+            max_tokens=600,
+            tools=[{"type": "web_search", "web_search": {}}],
+            tool_choice="auto"
         )
         
-        answer = resp.choices[0].message.content
+        answer = response.choices[0].message.content
         save_conversation(user_id, user_message, answer)
         return answer
         
     except Exception as e:
-        return f"❌ Блин, ошибка: {e}\nПопробуй ещё раз, я перезагружусь!"
+        return f"❌ Ошибка: {e}\nПопробуй ещё раз."
 
 # === ГЕНЕРАЦИЯ ПОСТОВ ===
 async def generate_posts_pack(task_context=""):
@@ -209,8 +257,7 @@ async def generate_posts_pack(task_context=""):
     raw_news = await fetch_news_hub()
     calendar = await get_f1_calendar(14)
     
-    # Всегда ищем дополнительную инфу в интернете
-    web_context = await search_web(f"F1 {task_context if task_context else 'последние новости'} {current_year}", max_results=3)
+    web_context = await search_web(f"F1 {task_context if task_context else 'последние новости'} {current_year}", max_results=2)
     
     full_context = f"""
 СЕГОДНЯ: {current_date} ({current_year} год)
@@ -218,28 +265,28 @@ async def generate_posts_pack(task_context=""):
 СВЕЖИЕ НОВОСТИ:
 {raw_news}
 
-КАЛЕНДАРЬ ГОНОК:
+КАЛЕНДАРЬ:
 {calendar}
 
-ЧТО НАШЛОСЬ В ИНТЕРНЕТЕ:
+ИНТЕРНЕТ:
 {web_context}
 
-ЗАПРОС ПОЛЬЗОВАТЕЛЯ: {task_context if task_context else 'Сделай пост о последних событиях в F1'}
+ЗАПРОС: {task_context if task_context else 'Сделай пост о последних событиях в F1'}
 """
     
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Создай 2-3 поста. Сегодня {current_date}, {current_year} год. Используй ТОЛЬКО актуальные данные! Никогда не пиши про 2024 или 2025 как текущие.\n\n{full_context}"}
+        {"role": "user", "content": f"Создай 1-3 поста. Сегодня {current_date}, {current_year} год. НЕ ДОБАВЛЯЙ ССЫЛКИ НА КАНАЛ!\n\n{full_context}"}
     ]
     
-    resp = await client.chat.completions.create(
-        model="openrouter/free",
+    response = await client.chat.completions.create(
+        model=F1_MODEL,
         messages=messages,
         temperature=0.5,
         max_tokens=1000
     )
     
-    content = resp.choices[0].message.content
+    content = response.choices[0].message.content
     try:
         start = content.find('[')
         end = content.rfind(']') + 1
@@ -255,6 +302,12 @@ async def generate_posts_pack(task_context=""):
         if post.get("photo_search"):
             img_url = await search_live_photo(post["photo_search"])
             post["photo_url"] = img_url
-        post["text"] = f"{post['text']}\n\n<a href='https://t.me/RedRaceF1'>Red Race | Подписаться</a>"
+        
+        # Убираем ссылки если есть
+        text = post.get("text", "")
+        text = re.sub(r'\n\n<a href=[\'"].*?[\'"]>.*?</a>', '', text)
+        if not text.endswith(('🏁', '🏎️')):
+            text += "\n\n🏁"
+        post["text"] = text
     
     return posts
