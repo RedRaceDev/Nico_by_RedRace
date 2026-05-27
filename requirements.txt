@@ -6,3 +6,5 @@ lxml==5.1.0
 lxml_html_clean==0.1.0
 sports-skills>=0.1.0
 duckduckgo_search>=5.0.0
+openai>=1.0.0
+httpx>=0.24.0
