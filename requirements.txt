@@ -4,8 +4,5 @@ feedparser==6.0.10
 trafilatura==1.6.0
 lxml==5.1.0
 lxml_html_clean==0.1.0
-duckduckgo_search==5.0.0
-openai==1.14.0
-httpx==0.24.1
-zero-api-key-web-search>=20.0.0   # Новая либа для поиска без ключей 
-smart-research>=0.5.0  # Новая имба либа
+sports-skills>=0.1.0
+duckduckgo_search>=5.0.0
