@@ -8,3 +8,4 @@ sports-skills>=0.1.0
 duckduckgo_search>=5.0.0
 openai>=1.0.0
 httpx>=0.24.0
+mcp-news>=0.1.0
