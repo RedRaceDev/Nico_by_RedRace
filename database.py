@@ -40,27 +40,6 @@ def save_conversation(user_id, message, response):
     conn.commit()
     conn.close()
 
-def get_conversation_history(user_id, limit=10):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''SELECT message, response FROM chat_history
-                 WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?''',
-              (str(user_id), limit))
-    rows = c.fetchall()
-    conn.close()
-    history = []
-    for msg, resp in reversed(rows):
-        history.append({"role": "user", "content": msg})
-        history.append({"role": "assistant", "content": resp})
-    return history
-
-def save_post(text, photo_url=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO posts (text, photo_url) VALUES (?, ?)", (text, photo_url))
-    conn.commit()
-    conn.close()
-
 def get_stats():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -73,10 +52,8 @@ def get_stats():
 def get_all_users():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT user_id, messages_count, last_seen FROM user_stats ORDER BY messages_count DESC")
-    users = c.fetchall()
-    conn.close()
-    return users
+    c.execute("SELECT user_id, messages_count FROM user_stats ORDER BY messages_count DESC")
+    return c.fetchall()
 
 def get_user_message_count(user_id):
     conn = sqlite3.connect(DB_PATH)
@@ -91,9 +68,7 @@ def get_last_dialogs(limit=20):
     c = conn.cursor()
     c.execute('''SELECT user_id, message, response, timestamp FROM chat_history
                  ORDER BY timestamp DESC LIMIT ?''', (limit,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    return c.fetchall()
 
 def clear_all_history():
     conn = sqlite3.connect(DB_PATH)
