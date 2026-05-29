@@ -334,4 +334,4 @@ async def handle_msg(m):
         return
     
     # === ЛОГИКА ДЛЯ ГРУППОВЫХ ЧАТОВ ===
-    is_group = m.chat.type in ['group',
+    is_group = m.chat.type in ['group', 'supergroup']
