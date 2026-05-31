@@ -291,7 +291,7 @@ async def monitor(callback):
                                 entry = feed.entries[0]
                                 link = entry.get('link', '')
                                 key = f"{src}_{link}"
-                                if key == last.get(src)):
+                                if key == last.get(src):
                                     continue
                                 last[src] = key
                                 if is_posted(entry.get('title', ''), link):
