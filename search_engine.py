@@ -1,53 +1,54 @@
 import asyncio
-from duckduckgo_search import AsyncDDGS
+from duckduckgo_search import DDGS
+from cachetools import TTLCache
 
-search_cache = {}
-CACHE_TTL = 300  # 5 минут
+# Кеш на 5 минут
+search_cache = TTLCache(maxsize=100, ttl=300)
 
 async def search_web(query: str, max_results: int = 5) -> str:
-    """Основная функция поиска через DuckDuckGo"""
+    """Поиск с кешем, через синхронный DDGS в потоке"""
     
-    # Проверяем кеш
     cache_key = query.lower().strip()
     if cache_key in search_cache:
-        result, timestamp = search_cache[cache_key]
-        if asyncio.get_event_loop().time() - timestamp < CACHE_TTL:
-            return result
+        return search_cache[cache_key]
     
     try:
-        async with AsyncDDGS() as ddgs:
-            results = []
-            async for r in ddgs.atext(query, max_results=max_results):
-                results.append(r)
+        # Запускаем синхронный поиск в отдельном потоке
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            None, 
+            lambda: list(DDGS().text(query, max_results=max_results))
+        )
+        
+        if not results:
+            return "❌ Ничего не найдено. Попробуй переформулировать запрос."
+        
+        formatted = "🌐 **Результаты поиска (DuckDuckGo):**\n\n"
+        for r in results[:max_results]:
+            title = r.get('title', '')
+            body = r.get('body', '')[:500]
+            href = r.get('href', '')
             
-            if not results:
-                return "❌ Ничего не найдено. Попробуй переформулировать запрос."
+            # Фильтр мусора
+            junk = ['wikipedia', 'covid', 'википедия', 'multiple sclerosis', 
+                    'johns hopkins', 'who.int', 'cdc.gov']
+            if any(x in title.lower() for x in junk):
+                continue
             
-            formatted = "🌐 **Результаты поиска (DuckDuckGo):**\n\n"
-            for r in results[:max_results]:
-                title = r.get('title', '')
-                body = r.get('body', '')[:500]
-                href = r.get('href', '')
-                
-                # Фильтруем мусор
-                if any(x in title.lower() for x in ['wikipedia', 'covid', 'википедия', 'multiple sclerosis']):
-                    continue
-                
-                formatted += f"📌 **{title}**\n"
-                formatted += f"📄 {body}\n"
-                formatted += f"🔗 {href}\n\n"
-            
-            if formatted == "🌐 **Результаты поиска (DuckDuckGo):**\n\n":
-                return "❌ Ничего не найдено (все результаты отфильтрованы)"
-            
-            # Сохраняем в кеш
-            search_cache[cache_key] = (formatted, asyncio.get_event_loop().time())
-            return formatted
-            
+            formatted += f"📌 **{title}**\n"
+            formatted += f"📄 {body}\n"
+            formatted += f"🔗 {href}\n\n"
+        
+        if formatted == "🌐 **Результаты поиска (DuckDuckGo):**\n\n":
+            return "❌ Ничего не найдено (все результаты отфильтрованы)"
+        
+        search_cache[cache_key] = formatted
+        return formatted
+        
     except Exception as e:
         print(f"Search error: {e}")
-        return f"❌ Ошибка поиска: {str(e)}"
+        return f"❌ Ошибка поиска: {e}"
 
 async def search_news(query: str, max_results: int = 3) -> str:
-    """Поиск новостей (обёртка с фильтром)"""
-    return await search_web(f"{query} formula 1 news 2026", max_results)
+    """Поиск новостей F1"""
+    return await search_web(f"{query} Formula 1 2026", max_results)
