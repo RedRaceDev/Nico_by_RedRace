@@ -1,61 +1,53 @@
 import asyncio
-import random
 import aiohttp
+import random
 import re
 from datetime import datetime, timedelta
-from google import genai
-import os
+from duckduckgo_search import DDGS
+from fake_useragent import UserAgent
 
-# === GEMINI ДЛЯ УТОЧНЕНИЯ ЗАПРОСОВ ===
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY")
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
-    gemini_model = genai.GenerativeModel('gemini-2.0-flash-lite')
-else:
-    gemini_model = None
-
-# === КЭШ ===
+ua = UserAgent()
 search_cache = {}
 
-# === РАБОЧИЕ ИНСТАНСЫ SEARXNG ===
 SEARXNG_INSTANCES = [
-    "https://searx.tiekoetter.com",
-    "https://searx.ninja",
-    "https://search.sapti.me",
+    "https://opnxng.com",
+    "https://priv.au",
+    "https://searx.perennialte.ch",
+    "https://search.canine.tools",
+    "https://search.catboy.house",
     "https://searx.work",
     "https://searx.be",
 ]
 
-async def _enhance_query_with_ai(original_query: str) -> str:
-    """Уточняет запрос через Gemini для новостей F1"""
-    if not gemini_model:
-        return f"{original_query} Формула-1 новости 2026"
+def _parse_searxng_html(html: str, max_results: int) -> str:
+    results = []
+    article_pattern = r'<article class="result[^>]*>(.*?)</article>'
+    articles = re.findall(article_pattern, html, re.DOTALL)
     
-    prompt = f"""
-    Ты помощник для новостного бота про Формулу-1.
-    Преврати запрос пользователя в точный поисковый запрос для новостей.
-    Добавь "Формула-1", "F1", "новости", "2026".
-    Верни ТОЛЬКО строку запроса.
-
-    Запрос: {original_query}
-    Ответ:"""
+    for article in articles[:max_results]:
+        title_match = re.search(r'<h[3|4][^>]*><a href="([^"]+)"[^>]*>(.*?)</a></h[3|4]>', article, re.DOTALL)
+        if not title_match:
+            continue
+        link = title_match.group(1)
+        title = re.sub(r'<[^>]+>', '', title_match.group(2)).strip()
+        
+        if any(x in title.lower() for x in ['wikipedia', 'covid', 'википедия', 'пандемия', 'multiple sclerosis']):
+            continue
+        
+        desc_match = re.search(r'<p class="content"[^>]*>(.*?)</p>', article, re.DOTALL)
+        description = re.sub(r'<[^>]+>', '', desc_match.group(1)).strip() if desc_match else ''
+        
+        results.append(f"📌 **{title}**\n📄 {description[:500]}\n🔗 {link}\n\n")
     
-    try:
-        response = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: gemini_model.generate_content(prompt)
-        )
-        enhanced = response.text.strip()
-        print(f"🔍 AI: '{original_query}' → '{enhanced}'")
-        return enhanced
-    except:
-        return f"{original_query} Формула-1 F1 новости 2026"
+    if results:
+        return "🌐 **Результаты поиска:**\n\n" + "".join(results[:max_results])
+    return None
 
-async def search_searxng(query: str, max_results: int = 5) -> str:
-    """Поиск через SearXNG — без ключей, без банов"""
+async def _search_searxng_html(query: str, max_results: int = 5) -> str:
     cache_key = query.lower().strip()
     if cache_key in search_cache:
         result, timestamp = search_cache[cache_key]
-        if datetime.now() - timestamp < timedelta(minutes=30):
+        if datetime.now() - timestamp < timedelta(minutes=15):
             return result
 
     instances = SEARXNG_INSTANCES.copy()
@@ -63,36 +55,50 @@ async def search_searxng(query: str, max_results: int = 5) -> str:
 
     for instance in instances:
         try:
-            url = f"{instance}/search?q={query}&format=json&categories=news"
+            url = f"{instance}/search?q={query}"
+            headers = {'User-Agent': ua.random}
+            
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=15) as resp:
+                async with session.get(url, headers=headers, timeout=15) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        results = data.get("results", [])
+                        html = await resp.text()
+                        results = _parse_searxng_html(html, max_results)
                         if results:
-                            formatted = "🌐 **Результаты поиска:**\n\n"
-                            count = 0
-                            for res in results:
-                                title = res.get('title', '')
-                                url_res = res.get('url', '#')
-                                content = res.get('content', '')[:500]
-                                # Пропускаем явный мусор
-                                if any(x in title.lower() for x in ['wikipedia', 'covid', 'википедия']):
-                                    continue
-                                formatted += f"📌 **{title}**\n📄 {content}\n🔗 {url_res}\n\n"
-                                count += 1
-                                if count >= max_results:
-                                    break
-                            if count > 0:
-                                search_cache[cache_key] = (formatted, datetime.now())
-                                return formatted
+                            search_cache[cache_key] = (results, datetime.now())
+                            return results
         except Exception as e:
-            print(f"SearXNG error {instance}: {e}")
+            print(f"Ошибка {instance}: {e}")
             continue
+    return None
 
-    return "❌ Не удалось найти новости. Попробуй позже."
+async def _search_ddg(query: str, max_results: int = 5) -> str:
+    try:
+        with DDGS() as ddgs:
+            results = ddgs.text(query, max_results=max_results)
+            if not results:
+                return None
+            formatted = "🌐 **Результаты поиска (DDG):**\n\n"
+            count = 0
+            for r in results:
+                if count >= max_results:
+                    break
+                title = r.get('title', '')
+                body = r.get('body', '')[:500]
+                href = r.get('href', '')
+                if any(x in title.lower() for x in ['wikipedia', 'covid', 'википедия']):
+                    continue
+                formatted += f"📌 **{title}**\n📄 {body}\n🔗 {href}\n\n"
+                count += 1
+            return formatted if count > 0 else None
+    except Exception as e:
+        print(f"DDG error: {e}")
+        return None
 
 async def search_web(query: str, max_results: int = 5) -> str:
-    """Главная функция поиска"""
-    enhanced = await _enhance_query_with_ai(query)
-    return await search_searxng(enhanced, max_results)
+    result = await _search_searxng_html(query, max_results)
+    if result:
+        return result
+    result = await _search_ddg(query, max_results)
+    if result:
+        return result
+    return "❌ Не удалось найти информацию. Попробуй переформулировать запрос."
