@@ -1,0 +1,749 @@
+import asyncio
+import os
+import time
+import random
+from datetime import datetime, timedelta
+from telebot.async_telebot import AsyncTeleBot
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+from aiohttp import web
+
+from scraper import (
+    monitor, post_on_topic, random_post, get_calendar, chat_reply,
+    mark_posted, morning_digest, ask_gemini, switch_model, get_current_model_id,
+    get_pending_posts, clear_pending_posts, set_pending_posts
+)
+from search_engine import search_web
+from database import init_db, save_conversation, get_stats, get_all_users, get_last_dialogs, clear_all_history, get_user_message_count
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+ADMIN_IDS = [7025868617]
+CHANNEL_ID = "@RedRaceF1"
+
+# Бета-тестеры
+BETA_USERS = {7076945880: "sunrise"}
+
+bot = None
+monitoring = True
+posts_cnt = 0
+dialogs_cnt = 0
+start_time = time.time()
+wait_search = False
+wait_topic = False
+wait_broadcast = False
+wait_post = False
+wait_bug = False
+test_mode_active = False
+MY_BOT_ID = None
+BOT_USERNAME = "RedNico_bot"
+
+def inc_posts(): global posts_cnt; posts_cnt += 1
+def inc_dialogs(): global dialogs_cnt; dialogs_cnt += 1
+
+def is_admin(user_id): return user_id in ADMIN_IDS
+def is_beta(user_id): return user_id in BETA_USERS
+def get_beta_name(user_id): return BETA_USERS.get(user_id, "Бета-тестер")
+
+# === НОВЫЕ ФУНКЦИИ ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ===
+async def analyze_photo_command(m):
+    await bot.send_message(m.chat.id, "📸 Отправь фото болида или трассы, я проанализирую его технические особенности.")
+    setattr(analyze_photo_command, 'waiting', True)
+
+async def handle_photo_analysis(m):
+    if not hasattr(analyze_photo_command, 'waiting') or not analyze_photo_command.waiting:
+        return
+    analyze_photo_command.waiting = False
+    
+    if not m.photo:
+        await bot.reply_to(m, "❌ Пожалуйста, отправь фото.")
+        return
+    
+    photo_file_id = m.photo[-1].file_id
+    file_info = await bot.get_file(photo_file_id)
+    photo_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
+    
+    status = await bot.reply_to(m, "🔍 Анализирую фото...")
+    prompt = "Ты гоночный инженер. Проанализируй это фото: что за машина, какие технические особенности можно заметить, какие детали выделяются?"
+    analysis = await ask_gemini(prompt)
+    await bot.edit_message_text(f"📸 **Анализ фото:**\n\n{analysis}", chat_id=m.chat.id, message_id=status.message_id, parse_mode="HTML")
+
+# === ПЕРСОНАЖИ ===
+REDRACE_CHARACTERS = {
+    "Псиникс": "Ебланище конченное. Работает в РедРейзе. Роман с Райконненом. Проебал 10кк поставив на Пиастри.",
+    "Вхуй": "Уебище жирное. Сирота, лучший дизайнер которого знает Кими, но который нихуя не делает.",
+    "Кими": "Создатель канала РедРейз. Муж Псиникса. Топ 1 по заглатыванию.",
+    "Макс_Это_Скам": "влиятельный хуй. Что ещё сказать.",
+    "Пьер Гасли": "нормальный тип, но не скинул писюн в ЛС. ФУУУУ",
+    "Пиастри": "Уебище из-за которого Псиникс проебал 10кк.",
+    "Берман": "Нытик, ездит по гравию. Съебался в ужасе.",
+    "Хирошима": "ОООО ФЕРНАНДО АЛОНСО. Долбаеб.",
+    "СанРайз": "жирное уебище, психопат.",
+    "Акира": "котакбас. Главное хуйло чата.",
+    "Артур¹¹": "позорно проебал во Франции.",
+    "МохмедАлл": "перестань просить ливреи. Всем ПОХУЙ.",
+    "Ghinok": "Горшочек петушочек, подрабатывает ершиком на зоне."
+}
+
+def get_random_character():
+    name, desc = random.choice(list(REDRACE_CHARACTERS.items()))
+    return f"🎭 <b>Ты — {name}</b>\n\n{desc}\n\n#RedRace"
+
+# === КЛАВИАТУРЫ ===
+def get_admin_keyboard():
+    markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(
+        KeyboardButton("📝 Пост на тему"), KeyboardButton("🎲 Рандом"),
+        KeyboardButton("🔍 Поиск"), KeyboardButton("📅 Календарь"),
+        KeyboardButton("📊 Статистика"), KeyboardButton("📜 История"),
+        KeyboardButton("👥 Пользователи"), KeyboardButton("📨 Рассылка"),
+        KeyboardButton("📤 Пост в канал"), KeyboardButton("🎭 Случайный персонаж"),
+        KeyboardButton("🛑 Стоп"), KeyboardButton("▶️ Старт"),
+        KeyboardButton("📰 Новости"), KeyboardButton("✅ Опубликовать"),
+        KeyboardButton("🧠 Очистить"), KeyboardButton("🎛️ Сменить модель"),
+        KeyboardButton("🔬 Анализ фото"), KeyboardButton("ℹ️ О системе")
+    )
+    return markup
+
+def get_beta_keyboard():
+    markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(
+        KeyboardButton("📝 Пост на тему"), KeyboardButton("🎲 Рандом"),
+        KeyboardButton("🔍 Поиск"), KeyboardButton("📅 Календарь"),
+        KeyboardButton("📊 Статистика"), KeyboardButton("🎭 Случайный персонаж"),
+        KeyboardButton("🐞 Сообщить о баге"), KeyboardButton("👤 Мой профиль"),
+        KeyboardButton("🔬 Режим отладки"), KeyboardButton("📈 Телеметрия"),
+        KeyboardButton("🎮 Тестовый режим"), KeyboardButton("🔐 Бета-консоль"),
+        KeyboardButton("📖 Документация"), KeyboardButton("🎛️ Сменить модель"),
+        KeyboardButton("🔬 Анализ фото")
+    )
+    return markup
+
+def get_user_keyboard():
+    markup = ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
+    markup.add(
+        KeyboardButton("📅 Календарь"),
+        KeyboardButton("🎭 Случайный персонаж"),
+        KeyboardButton("🎮 Карточная игра"),
+        KeyboardButton("🔬 Анализ фото")
+    )
+    return markup
+
+# === HEALTHCHECK ===
+async def health_check(request):
+    return web.Response(text="Nico is alive", status=200)
+
+async def start_health_server():
+    app = web.Application()
+    app.router.add_get("/", health_check)
+    app.router.add_get("/health", health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"✅ Health check on port {port}")
+
+async def on_post(text, title, link):
+    global monitoring
+    if not monitoring:
+        return
+    try:
+        await bot.send_message(CHANNEL_ID, text, parse_mode="HTML")
+        mark_posted(title, link)
+        inc_posts()
+        print(f"✅ {title[:50]}")
+    except Exception as e:
+        print(f"❌ {e}")
+
+# === АДМИН ФУНКЦИИ ===
+async def show_history(m):
+    rows = get_last_dialogs(20)
+    if not rows:
+        await bot.send_message(m.chat.id, "📭 Пусто")
+        return
+    text = "📜 Последние диалоги:\n\n"
+    for uid, msg, resp, ts in rows:
+        text += f"👤 {uid} | {ts[:16]}\n❓ {msg[:80]}\n✅ {resp[:80]}\n\n---\n\n"
+        if len(text) > 3500:
+            await bot.send_message(m.chat.id, text, parse_mode="HTML")
+            text = ""
+    if text:
+        await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def show_users(m):
+    users = get_all_users()
+    if not users:
+        await bot.send_message(m.chat.id, "📭 Нет пользователей")
+        return
+    text = "👥 Пользователи:\n\n"
+    for uid, count in users:
+        text += f"🆔 {uid} — {count} сообщений\n"
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def extended_stats(m):
+    stats = get_stats()
+    uptime = time.time() - start_time
+    text = f"""📊 Статистика
+
+📝 Постов: {stats['posts']}
+💬 Диалогов: {stats['dialogs']}
+👥 Пользователей: {stats['users']}
+📡 Мониторинг: {'✅' if monitoring else '⛔'}
+⏱ Аптайм: {int(uptime//3600)}ч
+🤖 Модель: {get_current_model_id()}
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def clear_history(m):
+    clear_all_history()
+    await bot.send_message(m.chat.id, "🧠 История очищена")
+
+async def show_pending_posts(m):
+    posts = get_pending_posts()
+    if not posts:
+        await bot.send_message(m.chat.id, "📭 Новых новостей нет")
+        return
+    text = f"📰 Готово к публикации ({len(posts)}):\n\n"
+    for i, p in enumerate(posts, 1):
+        text += f"{i}. {p['title'][:70]}\n"
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def publish_all_posts(m):
+    posts = get_pending_posts()
+    if not posts:
+        await bot.send_message(m.chat.id, "📭 Нет новостей")
+        return
+    await bot.send_message(m.chat.id, f"📤 Публикую {len(posts)} постов...")
+    for p in posts:
+        await on_post(p['post'], p['title'], p['link'])
+        await asyncio.sleep(3)
+    clear_pending_posts()
+    await bot.send_message(m.chat.id, f"✅ Опубликовано {len(posts)} постов")
+
+# === УПРАВЛЕНИЕ МОДЕЛЯМИ ===
+async def model_selector(m):
+    kb = InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        InlineKeyboardButton("🚀 Gemini 3.5 Flash", callback_data="model_gemini"),
+        InlineKeyboardButton("⚡ Gemini 3.1 Lite", callback_data="model_gemini_lite"),
+        InlineKeyboardButton("🌐 OpenRouter Free", callback_data="model_openrouter"),
+        InlineKeyboardButton("💪 NVIDIA Nemotron", callback_data="model_nemotron"),
+        InlineKeyboardButton("🎯 GPT-OSS-120B", callback_data="model_gpt_oss")
+    )
+    current = get_current_model_id()
+    await bot.send_message(m.chat.id, f"🎛️ **Выбор модели ИИ**\n\nТекущая модель: `{current}`\n\nВыбери новую:", parse_mode="HTML", reply_markup=kb)
+
+async def switch_to_model(model_key):
+    if switch_model(model_key):
+        return f"✅ Модель переключена на {model_key}"
+    return f"❌ Модель {model_key} не найдена"
+
+# === БЕТА ФУНКЦИИ ===
+async def beta_doc(m):
+    doc = """📖 Документация бета-тестера
+
+🔬 Режим отладки — техническая информация
+📈 Телеметрия — статистика работы
+🎮 Тестовый режим — сырые ответы ИИ
+🔐 Бета-консоль — личный кабинет
+🐞 Сообщить о баге — отправить баг админу
+👤 Мой профиль — твоя статистика
+🎛️ Сменить модель — выбор ИИ модели
+🔬 Анализ фото — анализ изображений
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, doc, parse_mode="HTML")
+
+async def beta_console(m):
+    stats = get_stats()
+    msgs = get_user_message_count(m.chat.id)
+    text = f"""🔐 Бета-консоль
+
+Роль: бета-тестер
+Твоих сообщений: {msgs}
+Постов: {stats['posts']}
+Диалогов: {stats['dialogs']}
+Модель: {get_current_model_id()}
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def debug_mode(m):
+    text = f"""🔬 Режим отладки
+
+Бот ID: {MY_BOT_ID}
+Мониторинг: {'✅' if monitoring else '❌'}
+Пользователей: {len(get_all_users())}
+Аптайм: {int((time.time()-start_time)//3600)}ч
+Модель: {get_current_model_id()}
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def show_telemetry(m):
+    stats = get_stats()
+    text = f"""📈 Телеметрия
+
+Постов: {stats['posts']}
+Диалогов: {stats['dialogs']}
+Пользователей: {stats['users']}
+Источников: 6
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+async def test_mode_cmd(m):
+    global test_mode_active
+    test_mode_active = True
+    await bot.send_message(m.chat.id, "🎮 Тестовый режим включен. Напиши запрос.")
+
+async def handle_test_mode(m):
+    global test_mode_active
+    if not test_mode_active:
+        return
+    test_mode_active = False
+    status = await bot.send_message(m.chat.id, "🔬 Генерирую...")
+    raw = await ask_gemini(m.text)
+    await bot.delete_message(m.chat.id, status.message_id)
+    await bot.send_message(m.chat.id, f"**Сырой ответ:**\n\n{raw[:2000]}")
+
+async def bug_report(m):
+    global wait_bug
+    await bot.send_message(m.chat.id, "🐞 Опиши баг:")
+    wait_bug = True
+
+async def save_bug_report(m):
+    global wait_bug
+    wait_bug = False
+    report = f"🐞 НОВЫЙ БАГ\nОт: {m.chat.id}\nВремя: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}\n\n{m.text}"
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, report, parse_mode="HTML")
+        except:
+            pass
+    await bot.send_message(m.chat.id, "✅ Баг отправлен")
+
+async def show_profile(m):
+    msgs = get_user_message_count(m.chat.id)
+    stats = get_stats()
+    text = f"""👤 Мой профиль
+
+Сообщений: {msgs}
+Постов: {stats['posts']}
+Роль: {'Бета-тестер' if is_beta(m.chat.id) else 'Пользователь'}
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, text, parse_mode="HTML")
+
+# === ОБЩИЕ ФУНКЦИИ ===
+async def broadcast_message(m):
+    global wait_broadcast
+    await bot.send_message(m.chat.id, "📨 Введите текст для рассылки:")
+    wait_broadcast = True
+
+async def send_broadcast(msg_text):
+    users = get_all_users()
+    sent = 0
+    for (uid, _) in users:
+        try:
+            await bot.send_message(uid, f"📢 **Рассылка**\n\n{msg_text}", parse_mode="HTML")
+            sent += 1
+            await asyncio.sleep(0.05)
+        except:
+            pass
+    await bot.send_message(ADMIN_IDS[0], f"✅ Отправлено {sent}")
+
+async def post_to_channel_prompt(m):
+    global wait_post
+    await bot.send_message(m.chat.id, "📤 Отправь текст/фото/видео в канал (30 сек):")
+    wait_post = True
+    asyncio.create_task(reset_post_timeout())
+
+async def reset_post_timeout():
+    global wait_post
+    await asyncio.sleep(30)
+    if wait_post:
+        wait_post = False
+        print("⚠️ Таймаут")
+
+async def publish_to_channel(m):
+    global wait_post
+    if not wait_post:
+        return
+    wait_post = False
+    try:
+        if m.text:
+            await bot.send_message(CHANNEL_ID, m.text, parse_mode="HTML")
+        elif m.photo:
+            caption = m.caption if m.caption else None
+            await bot.send_photo(CHANNEL_ID, m.photo[-1].file_id, caption=caption, parse_mode="HTML")
+        elif m.video:
+            caption = m.caption if m.caption else None
+            await bot.send_video(CHANNEL_ID, m.video.file_id, caption=caption, parse_mode="HTML")
+        await bot.send_message(m.chat.id, "✅ Опубликовано")
+    except Exception as e:
+        await bot.send_message(m.chat.id, f"❌ Ошибка: {e}")
+
+async def cancel_action(m):
+    global wait_post, wait_broadcast, wait_search, wait_topic, test_mode_active, wait_bug
+    wait_post = False
+    wait_broadcast = False
+    wait_search = False
+    wait_topic = False
+    test_mode_active = False
+    wait_bug = False
+    await bot.send_message(m.chat.id, "❌ Отменено")
+
+# === ПАНЕЛИ ===
+async def admin_panel(m):
+    if not is_admin(m.chat.id):
+        await bot.send_message(m.chat.id, "⛔ Доступ запрещен")
+        return
+    uptime = time.time() - start_time
+    pending = len(get_pending_posts())
+    status = f"""👑 Нико онлайн
+
+Работаю {int(uptime//3600)}ч {int((uptime%3600)//60)}м
+Мониторинг: {'✅' if monitoring else '⛔'}
+Постов: {posts_cnt}
+Диалогов: {dialogs_cnt}
+📰 Новостей: {pending}
+🤖 Модель: {get_current_model_id()}
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, status, parse_mode="HTML", reply_markup=get_admin_keyboard())
+
+async def beta_panel(m):
+    if not is_beta(m.chat.id):
+        await bot.send_message(m.chat.id, "⛔ Доступ запрещен")
+        return
+    stats = get_stats()
+    msgs = get_user_message_count(m.chat.id)
+    uptime = time.time() - start_time
+    status = f"""🤖 Привет, {get_beta_name(m.chat.id)}
+
+Работаю {int(uptime//3600)}ч
+Постов: {stats['posts']}
+Твоих сообщений: {msgs}
+🤖 Модель: {get_current_model_id()}
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, status, parse_mode="HTML", reply_markup=get_beta_keyboard())
+
+async def user_panel(m):
+    status = f"""🏎️ Привет! Я Нико 3.0 — твой гоночный инженер.
+
+• Отвечаю на вопросы про Формулу-1
+• Анализирую фото болидов и трасс
+• Ищу свежие новости
+• Помню историю диалогов
+
+🎮 Карточная игра: @sipmly_flag_bot
+
+Red Race | Подписаться"""
+    await bot.send_message(m.chat.id, status, parse_mode="HTML", reply_markup=get_user_keyboard())
+
+# === ОСНОВНОЙ ОБРАБОТЧИК ===
+async def handle_ask(m):
+    query = m.text.replace('/ask', '').strip()
+    if not query:
+        await bot.reply_to(m, "❓ Напиши вопрос после команды /ask")
+        return
+    status_msg = await bot.reply_to(m, "🔍 Ищу в интернете...")
+    search_result = await search_web(query)
+    await bot.edit_message_text(search_result, chat_id=m.chat.id, message_id=status_msg.message_id, parse_mode="HTML")
+
+async def handle_msg(m):
+    global wait_search, wait_topic, wait_broadcast, wait_post, wait_bug, test_mode_active, MY_BOT_ID
+    
+    if m.text and m.text.startswith('/'):
+        return
+    
+    # Обработка команды /ask
+    if m.text and m.text.startswith('/ask'):
+        await handle_ask(m)
+        return
+    
+    # Обработка фото для анализа
+    if m.photo and hasattr(analyze_photo_command, 'waiting') and analyze_photo_command.waiting:
+        await handle_photo_analysis(m)
+        return
+    
+    is_group = m.chat.type in ['group', 'supergroup']
+    if is_group:
+        if MY_BOT_ID is None:
+            me = await bot.get_me()
+            MY_BOT_ID = me.id
+            global BOT_USERNAME
+            BOT_USERNAME = me.username
+        msg_text = m.text or ''
+        if not (f'@{BOT_USERNAME}' in msg_text or (m.reply_to_message and m.reply_to_message.from_user.id == MY_BOT_ID)):
+            return
+        if m.text:
+            m.text = msg_text.replace(f'@{BOT_USERNAME}', '').strip()
+    
+    if wait_bug:
+        await save_bug_report(m)
+        return
+    if wait_broadcast:
+        await send_broadcast(m.text)
+        wait_broadcast = False
+        return
+    if wait_post:
+        await publish_to_channel(m)
+        return
+    if test_mode_active:
+        await handle_test_mode(m)
+        return
+    
+    if is_admin(m.chat.id) and m.text:
+        if m.text == "📜 История":
+            await show_history(m)
+            return
+        elif m.text == "👥 Пользователи":
+            await show_users(m)
+            return
+        elif m.text == "📨 Рассылка":
+            await broadcast_message(m)
+            return
+        elif m.text == "📤 Пост в канал":
+            await post_to_channel_prompt(m)
+            return
+        elif m.text == "📊 Статистика":
+            await extended_stats(m)
+            return
+        elif m.text == "🧠 Очистить":
+            await clear_history(m)
+            return
+        elif m.text == "🛑 Стоп":
+            monitoring = False
+            await bot.send_message(m.chat.id, "⛔ Мониторинг остановлен")
+            return
+        elif m.text == "▶️ Старт":
+            monitoring = True
+            await bot.send_message(m.chat.id, "✅ Мониторинг запущен")
+            return
+        elif m.text == "ℹ️ О системе":
+            await bot.send_message(m.chat.id, "Nico 3.0\nRed Race | Подписаться", parse_mode="HTML")
+            return
+        elif m.text == "📝 Пост на тему":
+            wait_topic = True
+            await bot.send_message(m.chat.id, "📝 Тема:")
+            return
+        elif m.text == "🎲 Рандом":
+            post = await random_post()
+            await bot.send_message(m.chat.id, post, parse_mode="HTML")
+            inc_posts()
+            return
+        elif m.text == "🔍 Поиск":
+            wait_search = True
+            await bot.send_message(m.chat.id, "🔍 Запрос:")
+            return
+        elif m.text == "📅 Календарь":
+            await bot.send_message(m.chat.id, await get_calendar(), parse_mode="HTML")
+            return
+        elif m.text == "🎭 Случайный персонаж":
+            await bot.send_message(m.chat.id, get_random_character(), parse_mode="HTML")
+            return
+        elif m.text == "📰 Новости":
+            await show_pending_posts(m)
+            return
+        elif m.text == "✅ Опубликовать":
+            await publish_all_posts(m)
+            return
+        elif m.text == "🎛️ Сменить модель":
+            await model_selector(m)
+            return
+        elif m.text == "🔬 Анализ фото":
+            await analyze_photo_command(m)
+            return
+    
+    if is_beta(m.chat.id) and m.text:
+        if m.text == "📖 Документация":
+            await beta_doc(m)
+            return
+        elif m.text == "🔐 Бета-консоль":
+            await beta_console(m)
+            return
+        elif m.text == "🔬 Режим отладки":
+            await debug_mode(m)
+            return
+        elif m.text == "📈 Телеметрия":
+            await show_telemetry(m)
+            return
+        elif m.text == "🎮 Тестовый режим":
+            await test_mode_cmd(m)
+            return
+        elif m.text == "🐞 Сообщить о баге":
+            await bug_report(m)
+            return
+        elif m.text == "👤 Мой профиль":
+            await show_profile(m)
+            return
+        elif m.text == "📝 Пост на тему":
+            wait_topic = True
+            await bot.send_message(m.chat.id, "📝 Тема:")
+            return
+        elif m.text == "🎲 Рандом":
+            post = await random_post()
+            await bot.send_message(m.chat.id, post, parse_mode="HTML")
+            inc_posts()
+            return
+        elif m.text == "🔍 Поиск":
+            wait_search = True
+            await bot.send_message(m.chat.id, "🔍 Запрос:")
+            return
+        elif m.text == "📅 Календарь":
+            await bot.send_message(m.chat.id, await get_calendar(), parse_mode="HTML")
+            return
+        elif m.text == "📊 Статистика":
+            await extended_stats(m)
+            return
+        elif m.text == "🎭 Случайный персонаж":
+            await bot.send_message(m.chat.id, get_random_character(), parse_mode="HTML")
+            return
+        elif m.text == "🎛️ Сменить модель":
+            await model_selector(m)
+            return
+        elif m.text == "🔬 Анализ фото":
+            await analyze_photo_command(m)
+            return
+    
+    # Пользовательские команды
+    if m.text == "📅 Календарь":
+        await bot.send_message(m.chat.id, await get_calendar(), parse_mode="HTML")
+        return
+    elif m.text == "ℹ️ О боте":
+        await bot.send_message(m.chat.id, "Nico 3.0\nRed Race | Подписаться", parse_mode="HTML")
+        return
+    elif m.text == "🎭 Случайный персонаж":
+        await bot.send_message(m.chat.id, get_random_character(), parse_mode="HTML")
+        return
+    elif m.text == "🎮 Карточная игра":
+        await bot.send_message(m.chat.id, "🎴 **Карточная игра по Формуле-1**\n\nСобирай пилотов, трассы, создавай коллекцию.\n\n🎲 @sipmly_flag_bot\n\nRed Race | Подписаться", parse_mode="HTML")
+        return
+    elif m.text == "🔬 Анализ фото":
+        await analyze_photo_command(m)
+        return
+    
+    # Ожидание ввода
+    if wait_search:
+        wait_search = False
+        await bot.send_message(m.chat.id, "🔍 Ищу...")
+        res = await search_web(m.text)
+        await bot.send_message(m.chat.id, res, parse_mode="HTML")
+        return
+    
+    if wait_topic:
+        wait_topic = False
+        await bot.send_message(m.chat.id, "📝 Генерирую...")
+        post = await post_on_topic(m.text)
+        await bot.send_message(m.chat.id, post, parse_mode="HTML")
+        inc_posts()
+        return
+    
+    # Обычный чат
+    status = await bot.send_message(m.chat.id, "🤔 Думаю...")
+    ans = await chat_reply(m.chat.id, m.text, use_search=True)
+    await bot.delete_message(m.chat.id, status.message_id)
+    await bot.send_message(m.chat.id, ans, parse_mode="HTML")
+    inc_dialogs()
+    save_conversation(str(m.chat.id), m.text, ans)
+
+async def start_cmd(m):
+    if is_admin(m.chat.id):
+        await admin_panel(m)
+    elif is_beta(m.chat.id):
+        await beta_panel(m)
+    else:
+        await user_panel(m)
+
+async def whoami_cmd(m):
+    await bot.send_message(m.chat.id, get_random_character(), parse_mode="HTML")
+
+async def cancel_cmd(m):
+    await cancel_action(m)
+
+async def model_callback(call):
+    model_map = {
+        "model_gemini": "gemini",
+        "model_gemini_lite": "gemini_lite",
+        "model_openrouter": "openrouter",
+        "model_nemotron": "nemotron",
+        "model_gpt_oss": "gpt_oss"
+    }
+    model_key = model_map.get(call.data)
+    if model_key:
+        result = await switch_to_model(model_key)
+        await bot.answer_callback_query(call.id, result)
+        await bot.edit_message_text(result, chat_id=call.message.chat.id, message_id=call.message.message_id)
+    else:
+        await bot.answer_callback_query(call.id, "Неизвестная модель")
+
+async def morning_digest_worker():
+    while True:
+        now = datetime.now()
+        target = now.replace(hour=9, minute=0, second=0)
+        if now >= target:
+            target += timedelta(days=1)
+        await asyncio.sleep((target - now).total_seconds())
+        try:
+            digest = await morning_digest()
+            await bot.send_message(CHANNEL_ID, digest, parse_mode="HTML")
+            print(f"☀️ Дайджест отправлен")
+        except Exception as e:
+            print(f"Digest error: {e}")
+
+async def main():
+    global bot, MY_BOT_ID
+    
+    init_db()
+    await start_health_server()
+    
+    bot = AsyncTeleBot(BOT_TOKEN)
+    
+    me = await bot.get_me()
+    MY_BOT_ID = me.id
+    global BOT_USERNAME
+    BOT_USERNAME = me.username
+    print(f"🤖 Бот: @{BOT_USERNAME} | ID: {MY_BOT_ID}")
+    
+    @bot.message_handler(commands=['start', 'admin'])
+    async def start_handler(m):
+        await start_cmd(m)
+    
+    @bot.message_handler(commands=['whoami'])
+    async def whoami_handler(m):
+        await whoami_cmd(m)
+    
+    @bot.message_handler(commands=['cancel'])
+    async def cancel_handler(m):
+        await cancel_cmd(m)
+    
+    @bot.message_handler(commands=['model'])
+    async def model_handler(m):
+        if is_admin(m.chat.id) or is_beta(m.chat.id):
+            await model_selector(m)
+        else:
+            await bot.reply_to(m, "⛔ Только для админов и бета-тестеров")
+    
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("model_"))
+    async def model_callback_handler(call):
+        await model_callback(call)
+    
+    @bot.message_handler(func=lambda m: True, content_types=['text', 'photo', 'video'])
+    async def msg_handler(m):
+        await handle_msg(m)
+    
+    asyncio.create_task(monitor(on_post))
+    asyncio.create_task(morning_digest_worker())
+    
+    print("🚀 NICO 3.0 STARTED")
+    print(f"👑 Админ: {ADMIN_IDS}")
+    print(f"🔧 Бета: {list(BETA_USERS.keys())}")
+    print(f"🤖 Текущая модель: {get_current_model_id()}")
+    
+    await bot.infinity_polling()
+
+if __name__ == "__main__":
+    asyncio.run(main())
