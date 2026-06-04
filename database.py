@@ -1,7 +1,8 @@
 import sqlite3
+import os
 from datetime import datetime
 
-DB_PATH = "nico_bot.db"
+DB_PATH = os.environ.get("DB_PATH", "nico_bot.db")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -57,13 +58,6 @@ def save_conversation(user_id, message, response, username=None, first_name=None
                  messages_count = messages_count + 1''',
               (str(user_id), username, first_name, now, now,
                username, first_name, now))
-    conn.commit()
-    conn.close()
-
-def save_post(text, photo_url=None):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT INTO posts (text, photo_url) VALUES (?, ?)", (text, photo_url))
     conn.commit()
     conn.close()
 
