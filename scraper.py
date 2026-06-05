@@ -12,7 +12,7 @@ import fastf1
 import pandas as pd
 from cachetools import TTLCache
 
-# === НАСТРОЙКА FASTF1 ===
+os.makedirs('f1_cache', exist_ok=True)  # создание файла кеша для Fast F1
 fastf1.Cache.enable_cache('f1_cache')
 fastf1.set_log_level('WARNING')
 
