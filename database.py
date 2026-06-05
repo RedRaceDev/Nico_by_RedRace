@@ -5,9 +5,11 @@ from datetime import datetime
 DB_PATH = os.environ.get("DB_PATH", "nico_bot.db")
 
 def init_db():
+    """Инициализация базы данных"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
+    # Таблица истории диалогов
     c.execute('''CREATE TABLE IF NOT EXISTS chat_history
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id TEXT,
@@ -15,12 +17,14 @@ def init_db():
                   response TEXT,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     
+    # Таблица опубликованных постов
     c.execute('''CREATE TABLE IF NOT EXISTS posts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   text TEXT,
                   photo_url TEXT,
                   published_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     
+    # Таблица статистики пользователей
     c.execute('''CREATE TABLE IF NOT EXISTS user_stats
                  (user_id TEXT PRIMARY KEY,
                   username TEXT,
@@ -30,6 +34,7 @@ def init_db():
                   last_seen DATETIME,
                   messages_count INTEGER DEFAULT 0)''')
     
+    # Таблица баг-репортов
     c.execute('''CREATE TABLE IF NOT EXISTS bug_reports
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id TEXT,
@@ -39,29 +44,44 @@ def init_db():
     
     conn.commit()
     conn.close()
-    print("✅ База данных готова")
+    print(f"✅ База данных готова: {DB_PATH}")
 
 def save_conversation(user_id, message, response, username=None, first_name=None):
+    """Сохранить диалог и обновить статистику пользователя"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+    
+    # Сохраняем сообщение
     c.execute("INSERT INTO chat_history (user_id, message, response) VALUES (?, ?, ?)",
               (str(user_id), message, response))
     
+    # Обновляем статистику пользователя
     now = datetime.now()
     c.execute('''INSERT INTO user_stats 
-                 (user_id, username, first_name, first_seen, last_seen, messages_count)
-                 VALUES (?, ?, ?, ?, ?, 1)
+                 (user_id, username, first_name, last_name, first_seen, last_seen, messages_count)
+                 VALUES (?, ?, ?, ?, ?, ?, 1)
                  ON CONFLICT(user_id) DO UPDATE SET
                  username = COALESCE(?, username),
                  first_name = COALESCE(?, first_name),
+                 last_name = COALESCE(?, last_name),
                  last_seen = ?,
                  messages_count = messages_count + 1''',
-              (str(user_id), username, first_name, now, now,
-               username, first_name, now))
+              (str(user_id), username, first_name, None, now, now,
+               username, first_name, None, now))
+    
+    conn.commit()
+    conn.close()
+
+def save_post(text, photo_url=None):
+    """Сохранить опубликованный пост"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO posts (text, photo_url) VALUES (?, ?)", (text, photo_url))
     conn.commit()
     conn.close()
 
 def save_bug_report(user_id, message):
+    """Сохранить баг-репорт"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("INSERT INTO bug_reports (user_id, message) VALUES (?, ?)", (str(user_id), message))
@@ -69,6 +89,7 @@ def save_bug_report(user_id, message):
     conn.close()
 
 def get_stats():
+    """Получить общую статистику"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     posts = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
@@ -79,6 +100,7 @@ def get_stats():
     return {"posts": posts, "dialogs": dialogs, "users": users, "bugs": bugs}
 
 def get_all_users(limit=100):
+    """Получить список всех пользователей"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT user_id, username, first_name, messages_count, last_seen FROM user_stats ORDER BY messages_count DESC LIMIT ?", (limit,))
@@ -87,6 +109,7 @@ def get_all_users(limit=100):
     return rows
 
 def get_user_message_count(user_id):
+    """Количество сообщений от пользователя"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT messages_count FROM user_stats WHERE user_id = ?", (str(user_id),))
@@ -95,6 +118,7 @@ def get_user_message_count(user_id):
     return row[0] if row else 0
 
 def get_last_dialogs(limit=20):
+    """Последние диалоги"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute('''SELECT user_id, message, response, timestamp FROM chat_history
@@ -103,7 +127,19 @@ def get_last_dialogs(limit=20):
     conn.close()
     return rows
 
+def get_user_conversation(user_id, limit=50):
+    """Переписка с конкретным пользователем"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''SELECT message, response, timestamp FROM chat_history 
+                 WHERE user_id = ? 
+                 ORDER BY timestamp DESC LIMIT ?''', (str(user_id), limit))
+    rows = c.fetchall()
+    conn.close()
+    return rows[::-1]
+
 def clear_all_history():
+    """Очистить всю историю (только для админа)"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM chat_history")
@@ -111,7 +147,17 @@ def clear_all_history():
     conn.commit()
     conn.close()
 
+def clear_user_history(user_id):
+    """Очистить историю конкретного пользователя"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM chat_history WHERE user_id = ?", (str(user_id),))
+    c.execute("DELETE FROM user_stats WHERE user_id = ?", (str(user_id),))
+    conn.commit()
+    conn.close()
+
 def get_bug_reports(status="new"):
+    """Получить баг-репорты"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT id, user_id, message, created_at FROM bug_reports WHERE status = ? ORDER BY created_at DESC", (status,))
@@ -120,6 +166,7 @@ def get_bug_reports(status="new"):
     return rows
 
 def update_bug_status(bug_id, status):
+    """Обновить статус бага"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("UPDATE bug_reports SET status = ? WHERE id = ?", (status, bug_id))
