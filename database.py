@@ -19,6 +19,10 @@ def init_db():
                   username TEXT, first_name TEXT,
                   first_seen DATETIME, last_seen DATETIME,
                   messages_count INTEGER DEFAULT 0)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS donations
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id TEXT, amount INTEGER,
+                  created_at DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     conn.commit()
     conn.close()
     print("✅ База данных готова")
@@ -47,14 +51,22 @@ def save_post(text, media_type=None, media_id=None):
     conn.commit()
     conn.close()
 
+def save_donation(user_id, amount):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO donations (user_id, amount) VALUES (?, ?)", (str(user_id), amount))
+    conn.commit()
+    conn.close()
+
 def get_stats():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     posts = c.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
     dialogs = c.execute("SELECT COUNT(*) FROM chat_history").fetchone()[0]
     users = c.execute("SELECT COUNT(*) FROM user_stats").fetchone()[0]
+    donations = c.execute("SELECT SUM(amount) FROM donations").fetchone()[0] or 0
     conn.close()
-    return {"posts": posts, "dialogs": dialogs, "users": users}
+    return {"posts": posts, "dialogs": dialogs, "users": users, "donations": donations}
 
 def get_all_users(limit=50):
     conn = sqlite3.connect(DB_PATH)
